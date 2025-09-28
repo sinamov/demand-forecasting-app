@@ -1,0 +1,23 @@
+# Web Framework & Server
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Data Science & Machine Learning
+pandas
+scikit-learn
+numpy
+category-encoders
+joblib
+xgboost
+lightgbm
+optuna
+holidays
+
+# Cloud Storage
+google-cloud-storage
+gcsfs
+
+# Plotting
+plotly
+kaleido
