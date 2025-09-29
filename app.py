@@ -5,9 +5,6 @@ import pandas as pd
 import joblib
 import plotly.express as px
 import os
-from datetime import datetime
-
-# We will continue to use our robust, decoupled prediction and feature engineering functions
 from api.prediction import generate_forecast
 from api.schemas import ForecastWeek
 from pydantic import ValidationError
@@ -36,148 +33,91 @@ def load_assets():
             sku_id = int(filename.split('_')[3].split('.')[0])
             artifacts[sku_id] = joblib.load(os.path.join(artifacts_dir, filename))
             
-    # Get lists of all SKUs and Stores available in the historical data
-    available_skus = sorted(list(artifacts.keys()))
-    available_stores = sorted(history_df['store_id'].unique().tolist()) if history_df is not None else []
-            
-    return artifacts, history_df, available_skus, available_stores
+    return artifacts, history_df
 
 # Load the assets. The decorator will cache this so it only runs once.
-ARTIFACTS, HISTORY_DF, AVAILABLE_SKUS, AVAILABLE_STORES = load_assets()
+ARTIFACTS, HISTORY_DF = load_assets()
+AVAILABLE_SKUS = sorted(list(ARTIFACTS.keys()))
 
 # --- USER INTERFACE ---
 st.title("📈 Retail Demand Forecasting")
-st.write(
-    "This app forecasts future product demand based on your inputs. "
-    "Use the table below to enter the known data for the weeks you want to forecast."
-)
+st.write("Upload a CSV file with future week data to generate a forecast.")
 
-# --- 1. EDITABLE TABLE FOR USER INPUT (Replaces File Upload) ---
-st.subheader("Future Week Data Input")
-
-# Create a sample DataFrame to guide the user
-initial_data = {
-    "week": ["16/07/13", "23/07/13"],
-    "sku_id": [AVAILABLE_SKUS[0], AVAILABLE_SKUS[0]],
-    "store_id": [AVAILABLE_STORES[0], AVAILABLE_STORES[1]],
-    "base_price": [150.0, 150.0],
-    "total_price": [145.0, 140.0],
-    "is_featured_sku": [0, 1],
-    "is_display_sku": [1, 1],
-}
-input_df = pd.DataFrame(initial_data)
-
-# Use st.data_editor to create an interactive, editable table
-edited_df = st.data_editor(
-    input_df,
-    num_rows="dynamic",
-    column_config={
-        "week": st.column_config.DateColumn(
-            "Week (Start Date)",
-            format="DD/MM/YY",
-            step=timedelta(days=7),
-            required=True,
-        ),
-        "sku_id": st.column_config.SelectboxColumn(
-            "SKU ID",
-            options=AVAILABLE_SKUS,
-            required=True
-        ),
-        "store_id": st.column_config.SelectboxColumn(
-            "Store ID",
-            options=AVAILABLE_STORES,
-            required=True
-        ),
-        "is_featured_sku": st.column_config.CheckboxColumn("Featured?", default=False),
-        "is_display_sku": st.column_config.CheckboxColumn("On Display?", default=False),
-    },
-    key="forecast_input_editor"
-)
-
-# --- SIDEBAR FOR FILTERING AND SUBMITTING ---
+# --- SIDEBAR FOR USER INPUTS ---
 with st.sidebar:
     st.header("Forecast Parameters")
     
-    # Dropdown to select a SKU from the user's input table
-    sku_options = sorted(edited_df['sku_id'].unique().tolist())
+    # Dropdown to select a valid SKU
     selected_sku = st.selectbox(
-        "Select a SKU ID to Forecast:",
-        options=sku_options
+        "Select a SKU ID:",
+        options=AVAILABLE_SKUS
     )
     
-    # --- 2. STORE ID DROPDOWN WITH "ALL STORES" ---
-    store_options_in_table = sorted(edited_df[edited_df['sku_id'] == selected_sku]['store_id'].unique().tolist())
-    store_options = ["All Stores"] + store_options_in_table
-    selected_store = st.selectbox(
-        "Select a Store ID to Display:",
-        options=store_options
+    # Number input for the Store ID
+    selected_store = st.number_input(
+        "Enter a Store ID:",
+        min_value=0,
+        step=1,
+        value=8091 # A default value
     )
     
-    # The main action button
-    submit_button = st.button("Generate Forecast", type="primary")
+    # File uploader for the future data
+    uploaded_file = st.file_uploader(
+        "Upload your future weeks data (CSV)",
+        type="csv"
+    )
 
 # --- MAIN PANEL FOR LOGIC AND OUTPUT ---
-if submit_button:
-    if edited_df.empty:
-        st.warning("Please enter data into the input table before generating a forecast.")
-    else:
-        try:
-            # Prepare the dataframe for prediction
-            future_df = edited_df.copy()
-            future_df['week'] = pd.to_datetime(future_df['week'], format="DD/MM/YY")
-            
-            # Pydantic validation (now with a clean error message)
-            data_dicts = future_df.to_dict(orient='records')
-            [ForecastWeek(**row) for row in data_dicts]
-            
-            # Filter for the selected SKU before forecasting
-            future_df_sku = future_df[future_df['sku_id'] == selected_sku]
+if uploaded_file is not None:
+    try:
+        # Load and validate the uploaded data
+        future_df = pd.read_csv(uploaded_file, parse_dates=['week'], date_format='%d/%m/%y')
+        
+        # Validation Block
+        data_dicts = future_df.to_dict(orient='records')
+        [ForecastWeek(**row) for row in data_dicts]
 
-            if future_df_sku.empty:
-                st.error(f"The input table contains no data for the selected SKU ID: {selected_sku}.")
-            else:
-                with st.spinner("Generating forecast... This may take a moment."):
-                    predictions_df = generate_forecast(ARTIFACTS, HISTORY_DF, future_df_sku)
+        # Filter for the selected SKU
+        future_df_sku = future_df[future_df['sku_id'] == selected_sku]
 
-                st.success("Forecast generated successfully!")
+        if future_df_sku.empty:
+            st.error(f"The uploaded file contains no data for the selected SKU ID: {selected_sku}. Please check your file.")
+        else:
+            with st.spinner("Generating forecast... This may take a moment."):
+                # Generate the forecast
+                predictions_df = generate_forecast(ARTIFACTS, HISTORY_DF, future_df_sku)
                 
-                # --- LOGIC FOR "ALL STORES" vs. SINGLE STORE ---
-                if selected_store == "All Stores":
-                    display_df = predictions_df.groupby('week', as_index=False)['units_sold'].sum()
-                    plot_title = f"Total Aggregated Demand for SKU {selected_sku}"
-                else:
-                    display_df = predictions_df[predictions_df['store_id'] == selected_store].copy()
-                    plot_title = f"Demand Forecast for SKU {selected_sku} at Store {selected_store}"
+                # Filter for the selected store to plot
+                plot_df = predictions_df[predictions_df['store_id'] == selected_store].copy()
 
-                if display_df.empty:
-                    st.warning(f"No forecast data available for the selected store(s).")
-                else:
-                    # --- DISPLAY THE INTERACTIVE PLOT ---
-                    st.subheader(plot_title)
-                    display_df['week'] = pd.to_datetime(display_df['week'])
-                    fig = px.bar(
-                        display_df, x='week', y='units_sold', template='plotly_white'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # --- 3. DOWNLOAD BUTTON (Replaces unwanted text) ---
-                    st.subheader("Download Forecast Data")
-                    
-                    # Convert dataframe to CSV string for the download button
-                    csv_data = display_df.to_csv(index=False).encode('utf-8')
-                    
-                    st.download_button(
-                       label="Download data as CSV",
-                       data=csv_data,
-                       file_name=f'forecast_sku_{selected_sku}.csv',
-                       mime='text/csv',
-                    )
-                    
-                    st.dataframe(display_df)
+            st.success("Forecast generated successfully!")
 
-        except ValidationError:
-            st.error("Input data is invalid. Please ensure all required fields in the table are filled correctly.")
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+            if plot_df.empty:
+                st.warning(f"A forecast was generated for SKU {selected_sku}, but no predictions were made for the selected Store ID: {selected_store}.")
+            else:
+                # --- DISPLAY THE INTERACTIVE PLOT ---
+                st.subheader(f"Forecast for SKU {selected_sku} at Store {selected_store}")
+                
+                plot_df['week'] = pd.to_datetime(plot_df['week'])
+                
+                fig = px.bar(
+                    plot_df, 
+                    x='week', 
+                    y='units_sold', 
+                    title=f'Weekly Demand Forecast', 
+                    template='plotly_white'
+                )
+                
+                # Use Streamlit's native Plotly chart element
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # --- DISPLAY THE DATA TABLE ---
+                st.subheader("Forecast Data")
+                st.dataframe(plot_df)
+
+    except ValidationError as e:
+        st.error(f"Invalid CSV format: {e.errors()}")
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
 else:
-    st.info("Fill out the input table and click 'Generate Forecast' in the sidebar.")
+    st.info("Please upload a CSV file to begin.")
