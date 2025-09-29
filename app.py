@@ -106,6 +106,14 @@ with st.sidebar:
     selected_store = st.selectbox("Select a Store to Display:", options=store_options)
     
     submit_button = st.button("Generate Forecast", type="primary")
+    
+    st.markdown("---")
+    st.markdown(
+        "**About the Author**\n\n"
+        "This app was created by **Sina Movahedi Aliabadi**.\n\n"
+        "[LinkedIn](https://www.linkedin.com/in/sina-movahedi-aliabadi/)\n\n"
+        "[GitHub Repository](https://github.com/sinamov/demand-forecasting-app)"
+    )
 
 if submit_button:
     if input_df.empty:
@@ -187,3 +195,4 @@ if submit_button:
         except Exception as e:
             st.error(f"An error occurred: {e}")
             st.exception(e)
+            
